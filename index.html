@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LP Visual Solver — Dark (Correct)</title>
+
+<style>
+:root{
+  --bg:#0f172a;
+  --card:rgba(255,255,255,.08);
+  --border:rgba(255,255,255,.15);
+  --text:#e5e7eb;
+  --muted:#9ca3af;
+  --accent:#38bdf8;
+  --accent2:#f472b6;
+  --ok:#22c55e;
+}
+*{box-sizing:border-box;font-family:Inter,system-ui,sans-serif}
+body{
+  margin:0;min-height:100vh;padding:20px;color:var(--text);
+  background:
+    radial-gradient(900px 500px at 10% -10%,#1e3a8a55,transparent),
+    radial-gradient(700px 400px at 90% 10%,#7c3aed55,transparent),
+    var(--bg);
+}
+.container{max-width:1200px;margin:auto}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+h1{margin:0;font-size:22px}
+.row{display:flex;gap:16px}
+@media(max-width:900px){.row{flex-direction:column}}
+.col{
+  background:var(--card);border:1px solid var(--border);
+  backdrop-filter:blur(12px);border-radius:14px;padding:14px
+}
+.left{width:360px}
+.right{flex:1}
+label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+input{
+  width:100%;padding:8px;border-radius:8px;
+  background:#020617;color:var(--text);
+  border:1px solid var(--border)
+}
+.btn{padding:9px 14px;border-radius:10px;border:0;cursor:pointer;font-weight:600}
+.btn.add{background:linear-gradient(135deg,#38bdf8,#6366f1);color:#020617}
+.btn.solve{background:linear-gradient(135deg,#22c55e,#4ade80);color:#022c22}
+.btn.reset{background:transparent;color:var(--text);border:1px solid var(--border)}
+.constraints{max-height:300px;overflow:auto;margin-bottom:10px}
+.constraint{display:flex;gap:6px;align-items:center;margin-bottom:8px}
+.constraint input{width:60px;padding:6px}
+.constraint button{
+  background:#7f1d1d;color:#fecaca;border:0;border-radius:8px;padding:6px;cursor:pointer
+}
+svg{
+  width:100%;height:620px;
+  background:#020617;border-radius:12px;border:1px solid var(--border)
+}
+.status{margin-top:10px;font-size:14px}
+.opt{color:var(--accent2);font-weight:700}
+</style>
+</head>
+
+<body>
+<div class="container">
+<header>
+  <h1>LP Visual Solver — Dark Design</h1>
+  <button id="reset" class="btn reset">Reset</button>
+</header>
+
+<div class="row">
+<div class="col left">
+  <label>Цільова функція (Max)</label>
+  <div style="display:flex;gap:6px;margin-bottom:10px">
+    <input id="a" type="number" value="3"><span>× x₁ +</span>
+    <input id="b" type="number" value="2"><span>× x₂</span>
+  </div>
+
+  <label><input id="nonneg" type="checkbox" checked> x₁, x₂ ≥ 0</label>
+  <hr style="margin:14px 0;border-color:var(--border)">
+
+  <label>Обмеження</label>
+  <div id="constraints" class="constraints"></div>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button id="add" class="btn add">+ Додати</button>
+    <button id="solve" class="btn solve">Solve</button>
+  </div>
+
+  <div id="status" class="status"></div>
+  <div id="solution"></div>
+</div>
+
+<div class="col right">
+  <svg id="svg" viewBox="0 0 600 600"></svg>
+</div>
+</div>
+</div>
+
+<script>
+const svg=document.getElementById("svg");
+const consDiv=document.getElementById("constraints");
+const status=document.getElementById("status");
+const sol=document.getElementById("solution");
+
+let constraints=[
+  {c:1,d:0,s:6},
+  {c:0,d:1,s:4}
+];
+
+function renderConstraints(){
+  consDiv.innerHTML="";
+  constraints.forEach((o,i)=>{
+    const r=document.createElement("div");
+    r.className="constraint";
+    r.innerHTML=`
+      <input value="${o.c}"> x₁ +
+      <input value="${o.d}"> x₂ ≤
+      <input value="${o.s}">
+      <button>✕</button>`;
+    const ins=r.querySelectorAll("input");
+    ins[0].oninput=e=>o.c=+e.target.value;
+    ins[1].oninput=e=>o.d=+e.target.value;
+    ins[2].oninput=e=>o.s=+e.target.value;
+    r.querySelector("button").onclick=()=>{constraints.splice(i,1);renderConstraints();draw();}
+    consDiv.appendChild(r);
+  });
+}
+
+function intersect(l1,l2){
+  const det=l1.c*l2.d-l2.c*l1.d;
+  if(Math.abs(det)<1e-9) return null;
+  return {
+    x:(l1.s*l2.d-l2.s*l1.d)/det,
+    y:(l1.c*l2.s-l2.c*l1.s)/det
+  };
+}
+
+function feasible(p){
+  if(document.getElementById("nonneg").checked&&(p.x<0||p.y<0))return false;
+  return constraints.every(l=>l.c*p.x+l.d*p.y<=l.s+1e-9);
+}
+
+function objective(p){
+  return +a.value*p.x + +b.value*p.y;
+}
+
+function solveLP(){
+  const pts=[];
+  for(let i=0;i<constraints.length;i++)
+    for(let j=i+1;j<constraints.length;j++){
+      const p=intersect(constraints[i],constraints[j]);
+      if(p) pts.push(p);
+    }
+  if(nonneg.checked){pts.push({x:0,y:0});}
+  const feas=pts.filter(feasible);
+  if(!feas.length){status.textContent="Немає допустимої області";draw();return;}
+
+  let best=feas[0],bestVal=objective(best);
+  feas.forEach(p=>{
+    const v=objective(p);
+    if(v>bestVal){best=p;bestVal=v;}
+  });
+
+  status.innerHTML=`Оптимум знайдено`;
+  sol.innerHTML=`<div class="opt">x₁=${best.x.toFixed(3)}, x₂=${best.y.toFixed(3)}, f=${bestVal.toFixed(3)}</div>`;
+  draw(best,feas);
+}
+
+function draw(opt=null,feasPts=[]){
+  svg.innerHTML="";
+  const xs=feasPts.map(p=>p.x).concat(0);
+  const ys=feasPts.map(p=>p.y).concat(0);
+  const minX=Math.min(...xs)-1,maxX=Math.max(...xs)+1;
+  const minY=Math.min(...ys)-1,maxY=Math.max(...ys)+1;
+
+  const X=x=>(x-minX)/(maxX-minX)*600;
+  const Y=y=>600-(y-minY)/(maxY-minY)*600;
+
+  const ax=document.createElementNS(svg.namespaceURI,"line");
+  ax.setAttribute("x1",0);ax.setAttribute("x2",600);
+  ax.setAttribute("y1",Y(0));ax.setAttribute("y2",Y(0));
+  ax.setAttribute("stroke","#64748b");svg.appendChild(ax);
+
+  const ay=document.createElementNS(svg.namespaceURI,"line");
+  ay.setAttribute("y1",0);ay.setAttribute("y2",600);
+  ay.setAttribute("x1",X(0));ay.setAttribute("x2",X(0));
+  ay.setAttribute("stroke","#64748b");svg.appendChild(ay);
+
+  constraints.forEach(l=>{
+    let p1,p2;
+    if(Math.abs(l.d)>1e-9){
+      p1={x:minX,y:(l.s-l.c*minX)/l.d};
+      p2={x:maxX,y:(l.s-l.c*maxX)/l.d};
+    }else{
+      const x=l.s/l.c;
+      p1={x,y:minY};p2={x,y:maxY};
+    }
+    const ln=document.createElementNS(svg.namespaceURI,"line");
+    ln.setAttribute("x1",X(p1.x));ln.setAttribute("y1",Y(p1.y));
+    ln.setAttribute("x2",X(p2.x));ln.setAttribute("y2",Y(p2.y));
+    ln.setAttribute("stroke","#38bdf8");
+    ln.setAttribute("stroke-dasharray","6 4");
+    svg.appendChild(ln);
+  });
+
+  feasPts.forEach(p=>{
+    const c=document.createElementNS(svg.namespaceURI,"circle");
+    c.setAttribute("cx",X(p.x));c.setAttribute("cy",Y(p.y));
+    c.setAttribute("r",4);c.setAttribute("fill","#e5e7eb");
+    svg.appendChild(c);
+  });
+
+  if(opt){
+    const c=document.createElementNS(svg.namespaceURI,"circle");
+    c.setAttribute("cx",X(opt.x));c.setAttribute("cy",Y(opt.y));
+    c.setAttribute("r",7);c.setAttribute("fill","#f472b6");
+    svg.appendChild(c);
+  }
+}
+
+document.getElementById("add").onclick=()=>{
+  constraints.push({c:1,d:1,s:5});
+  renderConstraints();draw();
+};
+document.getElementById("solve").onclick=solveLP;
+document.getElementById("reset").onclick=()=>{
+  constraints=[{c:1,d:0,s:6},{c:0,d:1,s:4}];
+  a.value=3;b.value=2;renderConstraints();draw();
+};
+
+renderConstraints();draw();
+</script>
+</body>
+</html>
